@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "entregas-app",
+    "slug": "entregas-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "entregasapp",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyBb7rJA438WYzdA3js2zJcMYOotPn-FR6s"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.erick.sandoval10.entregasapp",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBb7rJA438WYzdA3js2zJcMYOotPn-FR6s"
+        }
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      ["expo-location", {
+        "locationAlwaysAndWhenInUsePermission": "Esta app necesita acceso a la ubicación para el seguimiento de entregas.",
+        "locationWhenInUsePermission": "Esta app necesita acceso a la ubicación para el seguimiento de entregas.",
+        "locationAlwaysPermission": "Esta aplicación necesita acceso a la ubicación en segundo plano para el seguimiento continuo de entregas."
+      }],
+      ["expo-task-manager"]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "328d1dfc-6c9a-4995-a587-61a56dda71cf"
+      }
+    }
+  }
+}
