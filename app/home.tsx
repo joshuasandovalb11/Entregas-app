@@ -43,8 +43,8 @@ export default function Home() {
             driver_id: authState.driver?.driver_id || 1,
             client_id: 1,
             start_time: new Date().toISOString(),
-            start_latitud: 32.5149,
-            start_longitud: -117.0382,
+            start_latitud: 32.49465864330434,
+            start_longitud: 116.93280604091417,
             client: {
               client_id: 1,
               name: 'Juan Pérez',

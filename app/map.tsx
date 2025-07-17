@@ -31,7 +31,10 @@ type EventType = 'inicio' | 'fin' | 'pausa' | 'reanudacion' | 'problema';
 
 const LOCATION_TASK_NAME = 'background-location-task';
 
-// Función para guardar ubicación en AsyncStorage
+/**
+ * Guarda la ubicación en AsyncStorage para persistencia local
+ * @param location Objeto de ubicación a guardar
+ */
 const saveLocationToStorage = async (location: any) => {
   try {
     const locationData = {
@@ -44,24 +47,20 @@ const saveLocationToStorage = async (location: any) => {
       heading: location.coords.heading,
     };
 
-    // Obtener ubicaciones existentes
     const existingLocations = await AsyncStorage.getItem('saved_locations');
     const locations = existingLocations ? JSON.parse(existingLocations) : [];
     locations.push(locationData);
     const recentLocations = locations.slice(-1000);
     await AsyncStorage.setItem('saved_locations', JSON.stringify(recentLocations));
-    console.log('Ubicación guardada en AsyncStorage:', {
-      lat: locationData.latitude,
-      lng: locationData.longitude,
-      accuracy: locationData.accuracy,
-      total_stored: recentLocations.length
-    });
   } catch (error) {
     console.error('Error al guardar ubicación localmente:', error);
   }
 };
 
-// Función para enviar ubicación a la API
+/**
+ * Envía la ubicación a la API del servidor
+ * @param location Objeto de ubicación a enviar
+ */
 const sendLocationToAPI = async (location: any) => {
   try {
     const locationData = {
@@ -74,42 +73,47 @@ const sendLocationToAPI = async (location: any) => {
       heading: location.coords.heading,
     };
 
-    // TODO: Implementar envío real a la API cuando esté disponible
-    // const response = await fetch('YOUR_API_ENDPOINT/tracking', {
-    //   method: 'POST',
-    //   headers: {
-    //     'Content-Type': 'application/json',
-    //     'Authorization': 'Bearer YOUR_TOKEN',
-    //   },
-    //   body: JSON.stringify(locationData),
-    // });
-    
-    console.log('Ubicación enviada a API (simulado):', {
-      lat: locationData.latitude,
-      lng: locationData.longitude,
-      timestamp: locationData.timestamp
+    // TODO: Implementar envío real a la API
+    // Ejemplo de llamada API (descomentar cuando esté disponible):
+    /*
+    const response = await fetch(`${Config.API_URL}/tracking`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authState.token}`,
+      },
+      body: JSON.stringify(locationData),
     });
+    if (!response.ok) throw new Error('Error en la respuesta del servidor');
+    */
+    
+    console.log('Ubicación enviada a API (simulado):', locationData);
   } catch (error) {
     console.error('Error al enviar ubicación a la API:', error);
   }
 };
 
 // Interfaces para la información de la ruta
-interface RouteInfo {
-  distance: {
-    text: string;
-    value: number;
-  };
-  duration: {
-    text: string;
-    value: number;
-  };
-  overview_polyline: {
-    points: string;
-  };
+interface RouteStep {
+  distance: { text: string; value: number };
+  duration: { text: string; value: number };
+  start_location: { lat: number; lng: number };
+  end_location: { lat: number; lng: number };
+  polyline: { points: string };
+  html_instructions: string;
+  maneuver?: string;
 }
 
-// Definición de la tarea de ubicación en background
+interface RouteInfo {
+  distance: { text: string; value: number };
+  duration: { text: string; value: number };
+  overview_polyline: { points: string };
+  steps: RouteStep[];
+}
+
+/**
+ * Tarea en segundo plano para seguimiento de ubicación
+ */
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) {
     console.error('Error en background location task:', error);
@@ -119,23 +123,14 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     const { locations } = data as any;
     if (locations && locations.length > 0) {
       const location = locations[0];
-      console.log('Ubicación actualizada:', {
-        latitud: location.coords.latitude,
-        longitud: location.coords.longitude,
-        accuracy: location.coords.accuracy,
-        timestamp: new Date().toISOString(),
-        source: 'background-task'
-      });
       try {
         await saveLocationToStorage(location);
-        await sendLocationToAPI(location);
-        console.log('Background location guardada correctamente');
+        await sendLocationToAPI(location); // Envía a la API
       } catch (error) {
-        console.error('Error al guardar la ubicación en background:', error);
+        console.error('Error al guardar ubicación:', error);
       }
     }
   }
-  return Promise.resolve();
 });
 
 export default function MapScreen({}: MapScreenProps) {
@@ -149,41 +144,25 @@ export default function MapScreen({}: MapScreenProps) {
   const [routeCoordinates, setRouteCoordinates] = useState<Location[]>([]);
   const [plannedRoute, setPlannedRoute] = useState<Location[]>([]);
   const [isLocationEnabled, setIsLocationEnabled] = useState(false);
-
-  // Estado para la ruta (sin pasos)
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
-
-  // Estados para cámara tipo conductor
-  const [cameraFollowMode, setCameraFollowMode] = useState<'none' | 'follow' | 'heading'>('none');
-  const [userHeading, setUserHeading] = useState<number>(0);
-
-  // Estados para el modal de problemas
+  const [detailedRoute, setDetailedRoute] = useState<Location[]>([]);
   const [showProblemModal, setShowProblemModal] = useState(false);
   const [problemDescription, setProblemDescription] = useState('');
-
-  // Estados para el delivery actual
   const [currentDelivery, setCurrentDelivery] = useState<Delivery | null>(null);
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [pausedTime, setPausedTime] = useState<Date | null>(null);
   const [totalPausedDuration, setTotalPausedDuration] = useState(0);
 
-  const [subscription, setSubscription] = useState<{ remove: () => void } | null>(null);
-  const [deviceOrientation, setDeviceOrientation] = useState<{
-    azimuth: number;
-    pitch: number;
-    roll: number;
-  } | null>(null);
-
-  // Mock delivery data - Esto vendrá de la API
+  // Datos de prueba - Reemplazar con datos reales de la API
   const mockDelivery: Delivery = {
     delivery_id: 1,
     driver_id: authState.driver?.driver_id || 1,
     client_id: 1,
     start_time: new Date().toISOString(),
-    start_latitud: 32.5149,
-    start_longitud: -117.0382,
-    end_latitud: 32.5500,
-    end_longitud: -117.0100,
+    start_latitud: 32.49465864330434,
+    start_longitud: 116.93280604091417,
+    end_latitud: 32.49465864330434,
+    end_longitud: -116.93280604091417,
     client: {
       client_id: 1,
       name: 'Jose Sanchez',
@@ -192,6 +171,7 @@ export default function MapScreen({}: MapScreenProps) {
     },
   };
 
+  // Efecto inicial: Carga datos de prueba y obtiene ubicación
   useEffect(() => {
     setCurrentDelivery(mockDelivery);
     initializeLocation();
@@ -202,87 +182,21 @@ export default function MapScreen({}: MapScreenProps) {
     };
   }, []);
 
+  // Efecto secundario: Calcula ruta cuando hay ubicación y entrega
   useEffect(() => {
     if (currentLocation && currentDelivery && deliveryState === 'not_started') {
       calculateRoute();
     }
   }, [currentLocation, currentDelivery]);
 
-  useEffect(() => {
-    // Solo activar sensores si el viaje está en progreso
-    if (deliveryState !== 'in_progress') {
-      if (subscription) subscription.remove();
-      setSubscription(null);
-      return;
-    }
-
-    let magnetometerData: { x: number; y: number; z: number } | null = null;
-    let accelerometerData: { x: number; y: number; z: number } | null = null;
-
-    const updateOrientation = () => {
-      if (magnetometerData && accelerometerData) {
-        const azimuth = Math.atan2(-magnetometerData.y, magnetometerData.x) * (180 / Math.PI);
-        const pitch = Math.atan2(
-          -accelerometerData.x,
-          Math.sqrt(accelerometerData.y * accelerometerData.y + accelerometerData.z * accelerometerData.z)
-        ) * (180 / Math.PI);
-        const roll = Math.atan2(accelerometerData.y, accelerometerData.z) * (180 / Math.PI);
-
-        setDeviceOrientation({
-          azimuth: azimuth < 0 ? azimuth + 360 : azimuth,
-          pitch,
-          roll
-        });
-
-        // Solo actualizar la cámara si el cambio de azimuth es significativo (>5°)
-        if (cameraFollowMode === 'heading' && currentLocation) {
-          if (Math.abs(userHeading - azimuth) > 5) {
-            setUserHeading(azimuth);
-            updateDriverCamera(currentLocation, azimuth, null);
-          }
-        }
-      }
-    };
-
-    const magnetometerSub = Magnetometer.addListener(data => {
-      magnetometerData = data;
-      updateOrientation();
-    });
-
-    const accelerometerSub = Accelerometer.addListener(data => {
-      accelerometerData = data;
-      updateOrientation();
-    });
-
-    // Configurar intervalos de actualización
-    Magnetometer.setUpdateInterval(100);
-    Accelerometer.setUpdateInterval(100);
-
-    setSubscription({
-      remove: () => {
-        magnetometerSub.remove();
-        accelerometerSub.remove();
-      }
-    });
-
-    return () => {
-      if (subscription) subscription.remove();
-    };
-  }, [cameraFollowMode, currentLocation, deliveryState]);
-
-  useEffect(() => {
-    return () => {
-      if (subscription) {
-        subscription.remove();
-      }
-    };
-  }, [subscription]);
-
+  /**
+   * Inicializa el servicio de ubicación
+   */
   const initializeLocation = async () => {
     try {
       const { status } = await LocationService.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Error', 'Se necesitan permisos de ubicación para usar esta función');
+        Alert.alert('Error', 'Se necesitan permisos de ubicación');
         return;
       }
 
@@ -299,8 +213,8 @@ export default function MapScreen({}: MapScreenProps) {
         mapRef.current.animateToRegion({
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
         });
       }
     } catch (error) {
@@ -308,6 +222,9 @@ export default function MapScreen({}: MapScreenProps) {
     }
   };
 
+  /**
+   * Calcula la ruta desde la ubicación actual al destino
+   */
   const calculateRoute = async () => {
     if (!currentLocation || !currentDelivery?.end_latitud || !currentDelivery?.end_longitud) return;
 
@@ -315,7 +232,6 @@ export default function MapScreen({}: MapScreenProps) {
       const start = `${currentLocation.latitude},${currentLocation.longitude}`;
       const end = `${currentDelivery.end_latitud},${currentDelivery.end_longitud}`;
       
-      // Usando Google Directions API con la clave configurada
       const response = await fetch(
         `https://maps.googleapis.com/maps/api/directions/json?origin=${start}&destination=${end}&key=${Config.GOOGLE_MAPS_API_KEY}`
       );
@@ -324,106 +240,134 @@ export default function MapScreen({}: MapScreenProps) {
       if (data.routes && data.routes.length > 0) {
         const route = data.routes[0];
         const leg = route.legs[0];
+        
         const routeInfo: RouteInfo = {
           distance: leg.distance,
           duration: leg.duration,
           overview_polyline: route.overview_polyline,
+          steps: leg.steps || [],
         };
+        
         setRouteInfo(routeInfo);
 
-        const decodedPath = decodePolyline(route.overview_polyline.points);
-        setPlannedRoute(decodedPath);
+        // Decodificar polilínea detallada
+        const detailedCoordinates: Location[] = [];
+        for (const step of leg.steps) {
+          const stepCoordinates = decodePolyline(step.polyline.points);
+          detailedCoordinates.push(...stepCoordinates);
+        }
+        
+        setDetailedRoute(detailedCoordinates);
+        const simplifiedRoute = decodePolyline(route.overview_polyline.points);
+        setPlannedRoute(simplifiedRoute);
 
+        // Ajustar vista del mapa
         if (mapRef.current) {
-          const coordinates = [
-            currentLocation,
-            { latitude: currentDelivery.end_latitud, longitude: currentDelivery.end_longitud },
-            ...decodedPath,
-          ];
-          mapRef.current.fitToCoordinates(coordinates, {
-            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+          mapRef.current.fitToCoordinates([...detailedCoordinates], {
+            edgePadding: { top: 100, right: 50, bottom: 150, left: 50 },
             animated: true,
           });
         }
-
-        console.log('Información de la ruta:', {
-          distancia: leg.distance.text,
-          duracion: leg.duration.text,
-        });
       }
     } catch (error) {
       console.error('Error al calcular ruta:', error);
+      // Fallback a ruta directa
       const directRoute = [
         currentLocation,
         { latitude: currentDelivery.end_latitud, longitude: currentDelivery.end_longitud },
       ];
       setPlannedRoute(directRoute);
+      setDetailedRoute(directRoute);
     }
   };
 
-  // Función para decodificar polyline de Google Maps
+  /**
+   * Decodifica una polilínea codificada de Google Maps
+   * @param encoded Cadena codificada
+   * @returns Array de coordenadas
+   */
   const decodePolyline = (encoded: string): Location[] => {
-    const poly = [];
-    let index = 0;
-    const len = encoded.length;
-    let lat = 0;
-    let lng = 0;
+    if (!encoded) return [];
+    const poly: Location[] = [];
+    let index = 0, lat = 0, lng = 0;
 
-    while (index < len) {
-      let b;
-      let shift = 0;
-      let result = 0;
+    while (index < encoded.length) {
+      let b, shift = 0, result = 0;
       do {
-        b = encoded.charAt(index++).charCodeAt(0) - 63;
+        b = encoded.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
-      const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      
+      const dlat = (result & 1) ? ~(result >> 1) : (result >> 1);
       lat += dlat;
 
       shift = 0;
       result = 0;
       do {
-        b = encoded.charAt(index++).charCodeAt(0) - 63;
+        b = encoded.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
-      const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+      
+      const dlng = (result & 1) ? ~(result >> 1) : (result >> 1);
       lng += dlng;
 
-      poly.push({
-        latitude: lat / 1e5,
-        longitude: lng / 1e5,
-      });
+      poly.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
     }
     return poly;
   };
 
+  /**
+   * Renderiza las líneas de la ruta en el mapa
+   */
+  const renderRoutePolylines = () => {
+    const routeToDisplay = detailedRoute.length > 1 ? detailedRoute : plannedRoute;
+    if (routeToDisplay.length <= 1) return null;
+    
+    return (
+      <Polyline
+        coordinates={routeToDisplay}
+        strokeWidth={5}
+        strokeColor="#4A90E2"
+        lineCap="round"
+        lineJoin="round"
+        zIndex={1}
+      />
+    );
+  };
+
+  /**
+   * Calcula la hora estimada de llegada
+   */
+  const calculateArrivalTime = () => {
+    if (!routeInfo) return '--:--';
+    const now = new Date();
+    now.setSeconds(now.getSeconds() + routeInfo.duration.value);
+    return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  /**
+   * Inicia el seguimiento de ubicación en primer y segundo plano
+   */
   const startLocationTracking = async () => {
     try {
       const { status } = await LocationService.requestBackgroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(
-          'Permisos de ubicación',
-          'Se necesitan permisos de ubicación en background para el tracking. Nota: El tracking en background está limitado en Expo Go.',
-          [{ text: 'Entendido' }]
-        );
+        Alert.alert('Permisos necesarios', 'Se requieren permisos de ubicación en segundo plano');
+        return;
       }
-      console.log('Iniciando location tracking...');
-      try {
-        await LocationService.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-          accuracy: LocationService.Accuracy.High,
-          timeInterval: 2000,
-          distanceInterval: 1,
-          foregroundService: {
-            notificationTitle: 'Navegación en curso',
-            notificationBody: 'Siguiendo la ruta hacia tu destino',
-          },
-        });
-        console.log('Background location tracking iniciado');
-      } catch (bgError) {
-        console.log('Background tracking falló, usando solo foreground:', bgError);
-      }
+      
+      await LocationService.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+        accuracy: LocationService.Accuracy.High,
+        timeInterval: 2000,
+        distanceInterval: 1,
+        foregroundService: {
+          notificationTitle: 'Navegación en curso',
+          notificationBody: 'Siguiendo la ruta hacia el destino',
+        },
+      });
+      
       setIsLocationEnabled(true);
       startRealtimeLocationUpdates();
     } catch (error) {
@@ -431,35 +375,26 @@ export default function MapScreen({}: MapScreenProps) {
     }
   };
 
-  const updateDriverCamera = (location: Location, heading: number | null, speed: number | null) => {
+  /**
+   * Actualiza la cámara del mapa para seguir al usuario
+   */
+  const updateDriverCamera = (location: Location, heading: number = 0) => {
     if (!mapRef.current || !location) return;
-    const baseZoom = 18;
-    const speedKmh = speed ? speed * 3.6 : 0;
-    let zoomAdjustment = 0;
-    if (speedKmh > 80) zoomAdjustment = 3;
-    else if (speedKmh > 60) zoomAdjustment = 2;
-    else if (speedKmh > 40) zoomAdjustment = 1;
-    else if (speedKmh > 20) zoomAdjustment = 0.5;
-    const finalZoom = Math.max(baseZoom - zoomAdjustment, 15);
-    let basePitch = 60;
-    if (deviceOrientation) {
-      basePitch = Math.min(Math.max(45, basePitch - deviceOrientation.pitch * 0.5), 70);
-    }
+    
     mapRef.current.animateCamera({
-      center: {
-        latitude: location.latitude,
-        longitude: location.longitude,
-      },
-      zoom: finalZoom,
-      heading: heading || userHeading || 0,
-      pitch: basePitch,
+      center: location,
+      zoom: 18,
+      heading,
+      pitch: 0,
     }, { duration: 300 });
   };
 
+  /**
+   * Inicia el seguimiento en tiempo real (primer plano)
+   */
   const startRealtimeLocationUpdates = async () => {
     try {
-      console.log('Iniciando tracking en tiempo real...');
-      const locationSubscription = await LocationService.watchPositionAsync(
+      await LocationService.watchPositionAsync(
         {
           accuracy: LocationService.Accuracy.BestForNavigation,
           timeInterval: 1000,
@@ -470,47 +405,42 @@ export default function MapScreen({}: MapScreenProps) {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
           };
-          const useDeviceHeading = deviceOrientation &&
-            (location.coords.heading === null ||
-              location.coords.heading === undefined ||
-              location.coords.accuracy && location.coords.accuracy > 10);
-          const currentHeading = useDeviceHeading ?
-            deviceOrientation.azimuth :
-            (location.coords.heading || userHeading || 0);
-          setUserHeading(currentHeading);
+          
           setCurrentLocation(newLocation);
           setRouteCoordinates(prev => [...prev, newLocation]);
-          if (mapRef.current && deliveryState === 'in_progress') {
-            updateDriverCamera(newLocation, currentHeading, location.coords.speed);
+          
+          if (deliveryState === 'in_progress') {
+            updateDriverCamera(newLocation, location.coords.heading || 0);
           }
+          
           saveLocationTracking(newLocation);
         }
       );
-      return () => {
-        if (locationSubscription && locationSubscription.remove) {
-          locationSubscription.remove();
-        }
-      };
     } catch (error) {
       console.error('Error en seguimiento en tiempo real:', error);
     }
   };
 
+  /**
+   * Detiene el seguimiento de ubicación
+   */
   const stopLocationTracking = async () => {
     try {
-      console.log('Deteniendo location tracking...');
       await LocationService.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       setIsLocationEnabled(false);
-      console.log('Location tracking detenido');
     } catch (error) {
       console.error('Error al detener tracking:', error);
     }
   };
 
+  /**
+   * Guarda un evento de entrega (inicio, pausa, etc.)
+   */
   const saveDeliveryEvent = async (eventType: EventType, notes?: string) => {
     if (!currentDelivery || !currentLocation) return;
+    
     const event: DeliveryEvent = {
-      event_id: Date.now(), // En producción, esto sería generado por la API
+      event_id: Date.now(),
       delivery_id: currentDelivery.delivery_id,
       event_type: eventType,
       timestamp: new Date().toISOString(),
@@ -518,25 +448,33 @@ export default function MapScreen({}: MapScreenProps) {
       longitud: currentLocation.longitude,
       notes,
     };
+
+    // TODO: Implementar envío real a la API
+    /*
     try {
-      // TODO: Enviar a la API
-      // await fetch('YOUR_API_ENDPOINT/delivery-events', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${authState.token}`,
-      //   },
-      //   body: JSON.stringify(event),
-      // });
-      
-      console.log('Evento guardado:', event);
+      const response = await fetch(`${Config.API_URL}/delivery-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authState.token}`,
+        },
+        body: JSON.stringify(event),
+      });
+      if (!response.ok) throw new Error('Error en la respuesta');
     } catch (error) {
       console.error('Error al guardar evento:', error);
     }
+    */
+    
+    console.log('Evento guardado (simulado):', event);
   };
 
+  /**
+   * Guarda el seguimiento de ubicación para la entrega
+   */
   const saveLocationTracking = async (location: Location) => {
     if (!currentDelivery) return;
+    
     const tracking: DeliveryTracking = {
       tracking_id: Date.now(),
       delivery_id: currentDelivery.delivery_id,
@@ -545,105 +483,86 @@ export default function MapScreen({}: MapScreenProps) {
       latitud: location.latitude,
       longitud: location.longitude,
     };
+
+    // TODO: Implementar envío real a la API
+    /*
     try {
-      // TODO: Enviar a la API
-      // await fetch('YOUR_API_ENDPOINT/delivery-tracking', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${authState.token}`,
-      //   },
-      //   body: JSON.stringify(tracking),
-      // });
-      
-      console.log('Tracking guardado (foreground):', {
-        delivery_id: tracking.delivery_id,
-        lat: tracking.latitud,
-        lng: tracking.longitud,
-        timestamp: tracking.timestamp
+      const response = await fetch(`${Config.API_URL}/delivery-tracking`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authState.token}`,
+        },
+        body: JSON.stringify(tracking),
       });
+      if (!response.ok) throw new Error('Error en la respuesta');
     } catch (error) {
       console.error('Error al guardar tracking:', error);
     }
+    */
+    
+    console.log('Tracking guardado (simulado):', tracking);
   };
 
-  // Funciones para manejar el inicio, pausa, reanudación y finalización de la entrega
+  /**
+   * Inicia la entrega
+   */
   const handleStartDelivery = async () => {
-    if (!currentLocation) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación actual');
+    if (!currentLocation || !routeInfo) {
+      Alert.alert('Error', !currentLocation ? 'No se pudo obtener la ubicación' : 'No hay ruta calculada');
       return;
     }
-    if (!routeInfo) {
-      Alert.alert('Error', 'No se ha calculado la ruta. Espera un momento y vuelve a intentar.');
-      return;
-    }
-    const motionGranted = await requestMotionPermissions();
-    if (!motionGranted) {
-      return;
-    }
-    console.log('Iniciando delivery...');
+
     setDeliveryState('in_progress');
     setStartTime(new Date());
     setRouteCoordinates([currentLocation]);
-    setCameraFollowMode('heading');
-    if (mapRef.current && currentLocation) {
-      mapRef.current.animateCamera({
-        center: {
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-        },
-        zoom: 18,
-        heading: userHeading || 0,
-        pitch: 60,
-      }, { duration: 1000 });
-    }
+    
+    updateDriverCamera(currentLocation);
     await startLocationTracking();
     await saveDeliveryEvent('inicio');
   };
 
-  const toggleCameraMode = () => {
-    if (cameraFollowMode === 'none') {
-      setCameraFollowMode('follow');
-    } else if (cameraFollowMode === 'follow') {
-      setCameraFollowMode('heading');
-    } else {
-      setCameraFollowMode('none');
-    }
-  };
-
+  /**
+   * Pausa la entrega
+   */
   const handlePauseDelivery = async () => {
     if (deliveryState !== 'in_progress') return;
     setDeliveryState('paused');
     setPausedTime(new Date());
     await stopLocationTracking();
     await saveDeliveryEvent('pausa');
-    Alert.alert('Entrega pausada', 'El seguimiento se ha pausado');
   };
 
+  /**
+   * Reanuda la entrega
+   */
   const handleResumeDelivery = async () => {
     if (deliveryState !== 'paused') return;
     setDeliveryState('in_progress');
     if (pausedTime) {
-      const pauseDuration = Date.now() - pausedTime.getTime();
-      setTotalPausedDuration(prev => prev + pauseDuration);
+      setTotalPausedDuration(prev => prev + (Date.now() - pausedTime.getTime()));
       setPausedTime(null);
     }
     await startLocationTracking();
     await saveDeliveryEvent('reanudacion');
-    Alert.alert('Entrega reanudada', 'El seguimiento se ha reanudado');
   };
 
+  /**
+   * Reporta un problema durante la entrega
+   */
   const handleReportProblem = async () => {
     if (!problemDescription.trim()) {
       Alert.alert('Error', 'Por favor describe el problema');
       return;
     }
     await saveDeliveryEvent('problema', problemDescription);
-    Alert.alert('Problema reportado', 'El problema ha sido registrado correctamente');
     setShowProblemModal(false);
     setProblemDescription('');
   };
 
+  /**
+   * Finaliza la entrega
+   */
   const handleCompleteDelivery = async () => {
     Alert.alert(
       'Finalizar entrega',
@@ -656,115 +575,52 @@ export default function MapScreen({}: MapScreenProps) {
             setDeliveryState('completed');
             await stopLocationTracking();
             await saveDeliveryEvent('fin');
-            const totalDuration = startTime ?
+            
+            // TODO: Enviar datos completos a la API
+            /*
+            const totalDuration = startTime ? 
               Date.now() - startTime.getTime() - totalPausedDuration : 0;
-            console.log('Duración total:', totalDuration);
-            Alert.alert(
-              'Entrega completada',
-              'La entrega ha sido finalizada exitosamente',
-              [{ text: 'OK', onPress: () => router.back() }]
-            );
+            await sendDeliveryCompleteToAPI(totalDuration);
+            */
+            
+            router.back();
           },
         },
       ]
     );
   };
 
-  const requestMotionPermissions = async () => {
-    try {
-      if (Platform.OS === 'ios') {
-        const { status } = await LocationService.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permiso requerido', 'Se necesitan permisos de ubicación para el seguimiento de orientación');
-          return false;
-        }
-      }
-      const isAvailable = await Magnetometer.isAvailableAsync();
-      if (!isAvailable) {
-        Alert.alert('Función no disponible', 'Tu dispositivo no tiene magnetómetro o no es compatible');
-        return false;
-      }
-      return true;
-    } catch (error) {
-      console.error('Error al verificar sensores:', error);
-      return false;
+  /**
+   * Centra el mapa en la ubicación actual
+   */
+  const resetCameraToCurrentLocation = () => {
+    if (mapRef.current && currentLocation) {
+      mapRef.current.animateCamera({
+        center: currentLocation,
+        zoom: 18,
+        heading: 0,
+        pitch: 0,
+      }, { duration: 300 });
     }
   };
-
-  // Función auxiliar para obtener la dirección cardinal
-  const getCardinalDirection = (angle: number) => {
-    const directions = ['Norte', 'Noreste', 'Este', 'Sureste', 'Sur', 'Suroeste', 'Oeste', 'Noroeste'];
-    const index = Math.round(angle / 45) % 8;
-    return directions[index];
-  };
-
-  const getButtonConfig = () => {
-    switch (deliveryState) {
-      case 'not_started':
-        return {
-          text: 'Iniciar Viaje',
-          color: '#4CAF50',
-          onPress: handleStartDelivery,
-        };
-      case 'in_progress':
-        return {
-          text: 'Pausar',
-          color: '#FF9800',
-          onPress: handlePauseDelivery,
-        };
-      case 'paused':
-        return {
-          text: 'Reanudar',
-          color: '#4CAF50',
-          onPress: handleResumeDelivery,
-        };
-      case 'completed':
-        return {
-          text: 'Completado',
-          color: '#9E9E9E',
-          onPress: () => {},
-        };
-      default:
-        return {
-          text: 'Iniciar Viaje',
-          color: '#4CAF50',
-          onPress: handleStartDelivery,
-        };
-    }
-  };
-
-  const buttonConfig = getButtonConfig();
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Mapa */}
+      {/* Mapa principal */}
       <MapView
         ref={mapRef}
         style={styles.map}
         initialRegion={{
           latitude: currentLocation?.latitude || mockDelivery.start_latitud,
           longitude: currentLocation?.longitude || mockDelivery.start_longitud,
-          latitudeDelta: 0.0009,
-          longitudeDelta: 0.0009,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
         }}
         showsUserLocation={true}
-        followsUserLocation={cameraFollowMode !== 'none'}
-        showsMyLocationButton={false}
-        showsCompass={true}
-        showsTraffic={deliveryState === 'in_progress'}
-        mapType="standard"
-        userLocationPriority="high"
-        zoomEnabled={true}
-        scrollEnabled={cameraFollowMode === 'none'}
-        rotateEnabled={true}
-        pitchEnabled={true}
-        showsBuildings={true}
-        loadingEnabled={true}
-        loadingIndicatorColor="#4A90E2"
-        moveOnMarkerPress={false}
-        showsPointsOfInterest={false}
-        userLocationFastestInterval={1000}
-        userLocationUpdateInterval={1000}
+        showsTraffic={true}
+        followsUserLocation={false}
+        rotateEnabled={false}
+        pitchEnabled={false}
       >
         {/* Marker de destino */}
         {mockDelivery.end_latitud && mockDelivery.end_longitud && (
@@ -779,19 +635,10 @@ export default function MapScreen({}: MapScreenProps) {
           />
         )}
 
-        {/* SOLO UNA RUTA - La ruta activa */}
-        {plannedRoute.length > 1 && (
-          <Polyline
-            coordinates={plannedRoute}
-            strokeWidth={6}
-            strokeColor="#4A90E2"
-            lineCap="round"
-            lineJoin="round"
-            zIndex={1}
-          />
-        )}
+        {/* Ruta planificada */}
+        {renderRoutePolylines()}
 
-        {/* Ruta real trazada - Solo si está en progreso */}
+        {/* Ruta recorrida (solo durante entrega) */}
         {routeCoordinates.length > 1 && deliveryState === 'in_progress' && (
           <Polyline
             coordinates={routeCoordinates}
@@ -804,63 +651,45 @@ export default function MapScreen({}: MapScreenProps) {
         )}
       </MapView>
 
-      {/* Indicador de orientación del dispositivo */}
-      {deviceOrientation && (
-        <View style={styles.compassIndicator}>
-          <Text style={styles.compassText}>
-            {Math.round(deviceOrientation.azimuth)}° {getCardinalDirection(deviceOrientation.azimuth)}
-          </Text>
-        </View>
-      )}
-
-      {/* Botón de menú */}
+      {/* Botón de menú (esquina superior izquierda) */}
       <TouchableOpacity
         style={styles.menuButton}
         onPress={() => router.back()}
       >
-        <Ionicons name="menu" size={24} color="#333" />
+        <Ionicons name="arrow-back" size={24} color="#333" />
       </TouchableOpacity>
 
+      {/* Botón de centrar (arriba del panel inferior) */}
       {deliveryState === 'in_progress' && (
         <TouchableOpacity
-          style={styles.cameraButton}
-          onPress={toggleCameraMode}
+          style={styles.centerButton}
+          onPress={resetCameraToCurrentLocation}
         >
-          <Ionicons
-            name={
-              cameraFollowMode === 'none' ? 'locate-outline' :
-              cameraFollowMode === 'follow' ? 'locate' : 'navigate'
-            }
-            size={24}
-            color={cameraFollowMode === 'none' ? '#666' : '#4A90E2'}
-          />
-          <Text style={styles.cameraButton}>
-            {cameraFollowMode === 'none' ? 'Modo Mapa' :
-            cameraFollowMode === 'follow' ? 'Seguimiento' : 'Navegación'}
-          </Text>
+          <Ionicons name="locate" size={20} color="#4A90E2" />
+          <Text style={styles.centerButtonText}>Centrar</Text>
         </TouchableOpacity>
       )}
 
-      {/* Panel inferior */}
+      {/* Panel inferior compacto */}
       <View style={styles.bottomPanel}>
-        {/* Información del cliente */}
-        <View style={styles.clientInfo}>
-          <Text style={styles.clientName}>
-            Cliente: {currentDelivery?.client?.name}
+        {/* Información de la entrega */}
+        <View style={styles.deliveryInfo}>
+          <Text style={styles.clientName} numberOfLines={1}>
+            {currentDelivery?.client?.name || 'Cliente'}
           </Text>
-          {/* Información de la ruta */}
+          
           {routeInfo && (
-            <View style={styles.routeInfo}>
+            <View style={styles.routeInfoContainer}>
               <View style={styles.routeInfoRow}>
-                <Ionicons name="location" size={16} color="#666" />
+                <Ionicons name="location" size={14} color="#666" />
                 <Text style={styles.routeInfoText}>
-                  Distancia: {routeInfo.distance.text}
+                  {routeInfo.distance.text}
                 </Text>
               </View>
               <View style={styles.routeInfoRow}>
-                <Ionicons name="time" size={16} color="#666" />
+                <Ionicons name="time" size={14} color="#666" />
                 <Text style={styles.routeInfoText}>
-                  Duración: {routeInfo.duration.text}
+                  {routeInfo.duration.text} • Llegada: {calculateArrivalTime()}
                 </Text>
               </View>
             </View>
@@ -877,11 +706,10 @@ export default function MapScreen({}: MapScreenProps) {
               <Text style={styles.startButtonText}>Iniciar Viaje</Text>
             </TouchableOpacity>
           ) : (
-            /* Botones para pausar/reanudar y finalizar */
-            <React.Fragment>
+            <>
               <TouchableOpacity
-                style={[styles.pauseButton, deliveryState === 'completed' && styles.disabledButton]}
-                onPress={buttonConfig.onPress}
+                style={[styles.actionButton, deliveryState === 'completed' && styles.disabledButton]}
+                onPress={deliveryState === 'in_progress' ? handlePauseDelivery : handleResumeDelivery}
                 disabled={deliveryState === 'completed'}
               >
                 <Ionicons
@@ -896,64 +724,65 @@ export default function MapScreen({}: MapScreenProps) {
                 onPress={handleCompleteDelivery}
                 disabled={deliveryState === 'completed'}
               >
-                <Text style={styles.finishButtonText}>Finalizar Entrega</Text>
+                <Text style={styles.finishButtonText}>Finalizar</Text>
               </TouchableOpacity>
-            </React.Fragment>
+            </>
           )}
         </View>
         
-        {/* Botón para reportar problemas */}
-        {deliveryState === 'in_progress' && (
+        {/* Botón para reportar problemas (solo durante entrega) */}
+        {deliveryState === 'in_progress' &&(
           <TouchableOpacity
             style={styles.problemButton}
             onPress={() => setShowProblemModal(true)}
           >
-            <Ionicons name="alert-circle-outline" size={20} color="#fc4109ff" />
+            <Ionicons name="alert-circle-outline" size={18} color="#fc4109" />
             <Text style={styles.problemButtonText}>Reportar Problema</Text>
           </TouchableOpacity>
         )}
+      </View>
 
-        {/* Modal para reportar problemas */}
-        <Modal
-          visible={showProblemModal}
-          animationType="slide"
-          transparent={true}
-          onRequestClose={() => setShowProblemModal(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Reportar Problema</Text>
-              <TextInput
-                style={styles.problemInput}
-                placeholder="Describe el problema..."
-                value={problemDescription}
-                onChangeText={setProblemDescription}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-              <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.cancelButton]}
-                  onPress={() => setShowProblemModal(false)}
-                >
-                  <Text style={styles.cancelButtonText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.submitButton]}
-                  onPress={handleReportProblem}
-                >
-                  <Text style={styles.submitButtonText}>Reportar</Text>
-                </TouchableOpacity>
-              </View>
+      {/* Modal para reportar problemas */}
+      <Modal
+        visible={showProblemModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowProblemModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Reportar Problema</Text>
+            <TextInput
+              style={styles.problemInput}
+              placeholder="Describe el problema..."
+              value={problemDescription}
+              onChangeText={setProblemDescription}
+              multiline
+              numberOfLines={4}
+              textAlignVertical="top"
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setShowProblemModal(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.submitButton]}
+                onPress={handleReportProblem}
+              >
+                <Text style={styles.submitButtonText}>Reportar</Text>
+              </TouchableOpacity>
             </View>
           </View>
-        </Modal>
-      </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
+// Estilos optimizados para pantallas móviles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -964,71 +793,112 @@ const styles = StyleSheet.create({
   },
   menuButton: {
     position: 'absolute',
-    top: 60,
-    left: 20,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 12,
+    top: Platform.OS === 'ios' ? 50 : 30,
+    left: 15,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
+  },
+  centerButton: {
+    position: 'absolute',
+    bottom: height * 0.22, // Posición relativa al panel inferior
+    right: 15,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  centerButtonText: {
+    marginLeft: 5,
+    color: '#4A90E2',
+    fontSize: 14,
+    fontWeight: '600',
   },
   bottomPanel: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingHorizontal: 15,
+    paddingTop: 15,
+    // paddingBottom: Platform.OS === 'ios' ? 25 : 0,
+    paddingBottom: Platform.OS === 'ios' ? 25 : 0 && Platform.OS === 'android' ? 0 : 25,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
+    maxHeight: height * 0.3,
   },
-  clientInfo: {
-    marginBottom: 20,
+  deliveryInfo: {
+    marginBottom: 12,
   },
   clientName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
     textAlign: 'center',
+    marginBottom: 8,
+  },
+  routeInfoContainer: {
+    marginTop: 8,
+  },
+  routeInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  routeInfoText: {
+    fontSize: 13,
+    color: '#666',
+    marginLeft: 6,
   },
   actionButtons: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 15,
+    marginBottom: 10,
   },
   startButton: {
     backgroundColor: '#4CAF50',
     borderRadius: 25,
-    paddingVertical: 15,
-    paddingHorizontal: 40,
+    paddingVertical: 12,
+    paddingHorizontal: 35,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
   },
   startButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
-  pauseButton: {
+  actionButton: {
     backgroundColor: '#F0F0F0',
     borderRadius: 25,
-    width: 50,
-    height: 50,
+    width: 45,
+    height: 45,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    marginRight: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.2,
@@ -1038,20 +908,20 @@ const styles = StyleSheet.create({
   finishButton: {
     backgroundColor: '#2196F3',
     borderRadius: 25,
-    paddingVertical: 15,
-    paddingHorizontal: 30,
+    paddingVertical: 12,
+    paddingHorizontal: 25,
     justifyContent: 'center',
     alignItems: 'center',
     flex: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
   },
   finishButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
   disabledButton: {
@@ -1061,11 +931,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   problemButtonText: {
-    color: '#fc4109ff',
-    fontSize: 14,
+    color: '#fc4109',
+    fontSize: 13,
     fontWeight: '600',
     marginLeft: 5,
   },
@@ -1095,7 +965,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     minHeight: 100,
-    fontSize: 16,
+    fontSize: 15,
     marginBottom: 20,
   },
   modalButtons: {
@@ -1116,57 +986,14 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: '#333',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     textAlign: 'center',
   },
   submitButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     textAlign: 'center',
-  },
-  routeInfo: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-  },
-  routeInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  routeInfoText: {
-    fontSize: 14,
-    color: '#666',
-    marginLeft: 8,
-  },
-  cameraButton: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  compassIndicator: {
-    position: 'absolute',
-    top: 100,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  compassText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
   },
 });
