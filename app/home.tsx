@@ -29,11 +29,11 @@ export default function Home() {
 
   const loadDeliveryStatus = async () => {
     try {
-      // TODO: Replace with actual API call
+      // TODO: Remplazar con la llamada a la API real
       // const response = await fetch(`YOUR_API_ENDPOINT/driver/${authState.driver?.driver_id}/status`);
       // const data = await response.json();
       
-      // Mock data for now
+      // Mock data
       const mockData: DeliveryStatus = {
         hasActiveDelivery: false,
         currentDelivery: null,
