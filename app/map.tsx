@@ -5,14 +5,14 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  Modal,
   TextInput,
   Dimensions,
   Platform,
+  AppState,
+  AppStateStatus,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Magnetometer, Accelerometer } from 'expo-sensors';
-import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
@@ -21,6 +21,8 @@ import * as TaskManager from 'expo-task-manager';
 import * as LocationService from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Config } from '../config/env';
+// @ts-ignore
+import getDirections from 'react-native-google-maps-directions';
 
 const { width, height } = Dimensions.get('window');
 
@@ -33,7 +35,6 @@ const LOCATION_TASK_NAME = 'background-location-task';
 
 /**
  * Guarda la ubicación en AsyncStorage para persistencia local
- * @param location Objeto de ubicación a guardar
  */
 const saveLocationToStorage = async (location: any) => {
   try {
@@ -59,7 +60,6 @@ const saveLocationToStorage = async (location: any) => {
 
 /**
  * Envía la ubicación a la API del servidor
- * @param location Objeto de ubicación a enviar
  */
 const sendLocationToAPI = async (location: any) => {
   try {
@@ -74,42 +74,11 @@ const sendLocationToAPI = async (location: any) => {
     };
 
     // TODO: Implementar envío real a la API
-    // Ejemplo de llamada API (descomentar cuando esté disponible):
-    /*
-    const response = await fetch(`${Config.API_URL}/tracking`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authState.token}`,
-      },
-      body: JSON.stringify(locationData),
-    });
-    if (!response.ok) throw new Error('Error en la respuesta del servidor');
-    */
-    
     console.log('Ubicación enviada a API (simulado):', locationData);
   } catch (error) {
     console.error('Error al enviar ubicación a la API:', error);
   }
 };
-
-// Interfaces para la información de la ruta
-interface RouteStep {
-  distance: { text: string; value: number };
-  duration: { text: string; value: number };
-  start_location: { lat: number; lng: number };
-  end_location: { lat: number; lng: number };
-  polyline: { points: string };
-  html_instructions: string;
-  maneuver?: string;
-}
-
-interface RouteInfo {
-  distance: { text: string; value: number };
-  duration: { text: string; value: number };
-  overview_polyline: { points: string };
-  steps: RouteStep[];
-}
 
 /**
  * Tarea en segundo plano para seguimiento de ubicación
@@ -125,7 +94,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
       const location = locations[0];
       try {
         await saveLocationToStorage(location);
-        await sendLocationToAPI(location); // Envía a la API
+        await sendLocationToAPI(location);
       } catch (error) {
         console.error('Error al guardar ubicación:', error);
       }
@@ -136,31 +105,33 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 export default function MapScreen({}: MapScreenProps) {
   const router = useRouter();
   const { authState } = useAuth();
-  const mapRef = useRef<MapView>(null);
 
   // Estados principales
   const [deliveryState, setDeliveryState] = useState<DeliveryState>('not_started');
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<Location[]>([]);
-  const [plannedRoute, setPlannedRoute] = useState<Location[]>([]);
   const [isLocationEnabled, setIsLocationEnabled] = useState(false);
-  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
-  const [detailedRoute, setDetailedRoute] = useState<Location[]>([]);
-  const [showProblemModal, setShowProblemModal] = useState(false);
-  const [problemDescription, setProblemDescription] = useState('');
   const [currentDelivery, setCurrentDelivery] = useState<Delivery | null>(null);
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [pausedTime, setPausedTime] = useState<Date | null>(null);
   const [totalPausedDuration, setTotalPausedDuration] = useState(0);
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const [routeInfo, setRouteInfo] = useState<{
+    distance: string;
+    duration: string;
+    estimatedArrival: string;
+  } | null>(null);
+  const [googleMapsOpened, setGoogleMapsOpened] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
-  // Datos de prueba - Reemplazar con datos reales de la API
+  // Datos de prueba
   const mockDelivery: Delivery = {
     delivery_id: 1,
     driver_id: authState.driver?.driver_id || 1,
     client_id: 1,
     start_time: new Date().toISOString(),
     start_latitud: 32.49465864330434,
-    start_longitud: 116.93280604091417,
+    start_longitud: -116.93280604091417,
     end_latitud: 32.49465864330434,
     end_longitud: -116.93280604091417,
     client: {
@@ -171,23 +142,58 @@ export default function MapScreen({}: MapScreenProps) {
     },
   };
 
-  // Efecto inicial: Carga datos de prueba y obtiene ubicación
+  // Efecto inicial
   useEffect(() => {
     setCurrentDelivery(mockDelivery);
     initializeLocation();
+    
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    
     return () => {
+      subscription?.remove();
       if (isLocationEnabled) {
         LocationService.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }
     };
   }, []);
 
-  // Efecto secundario: Calcula ruta cuando hay ubicación y entrega
+  // Calcula información de ruta cuando hay ubicación
   useEffect(() => {
-    if (currentLocation && currentDelivery && deliveryState === 'not_started') {
-      calculateRoute();
+    if (currentLocation && currentDelivery) {
+      calculateRouteInfo();
     }
   }, [currentLocation, currentDelivery]);
+
+  // Actualiza el tiempo actual cada segundo si la entrega está en progreso
+  useEffect(() => {
+    let interval: number;
+    
+    if (deliveryState === 'in_progress') {
+      interval = setInterval(() => {
+        setCurrentTime(Date.now());
+      }, 1000); // Actualizar cada segundo
+    }
+    
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [deliveryState]);
+
+  /**
+   * Maneja cambios en el estado de la app (para detectar cuando regresa de Google Maps)
+   */
+  const handleAppStateChange = (nextAppState: AppStateStatus) => {
+    if (appState.match(/inactive|background/) && nextAppState === 'active') {
+      // La app volvió al primer plano
+      if (googleMapsOpened && deliveryState === 'in_progress') {
+        console.log('Regresó de Google Maps, continuando tracking...');
+        // Aquí podrías mostrar un mensaje o actualizar el estado
+      }
+    }
+    setAppState(nextAppState);
+  };
 
   /**
    * Inicializa el servicio de ubicación
@@ -208,24 +214,15 @@ export default function MapScreen({}: MapScreenProps) {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
-
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        });
-      }
     } catch (error) {
       console.error('Error al obtener ubicación:', error);
     }
   };
 
   /**
-   * Calcula la ruta desde la ubicación actual al destino
+   * Calcula información básica de la ruta
    */
-  const calculateRoute = async () => {
+  const calculateRouteInfo = async () => {
     if (!currentLocation || !currentDelivery?.end_latitud || !currentDelivery?.end_longitud) return;
 
     try {
@@ -241,114 +238,70 @@ export default function MapScreen({}: MapScreenProps) {
         const route = data.routes[0];
         const leg = route.legs[0];
         
-        const routeInfo: RouteInfo = {
-          distance: leg.distance,
-          duration: leg.duration,
-          overview_polyline: route.overview_polyline,
-          steps: leg.steps || [],
-        };
-        
-        setRouteInfo(routeInfo);
+        // Calcular hora de llegada estimada
+        const now = new Date();
+        now.setSeconds(now.getSeconds() + leg.duration.value);
+        const estimatedArrival = now.toLocaleTimeString([], { 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
 
-        // Decodificar polilínea detallada
-        const detailedCoordinates: Location[] = [];
-        for (const step of leg.steps) {
-          const stepCoordinates = decodePolyline(step.polyline.points);
-          detailedCoordinates.push(...stepCoordinates);
-        }
-        
-        setDetailedRoute(detailedCoordinates);
-        const simplifiedRoute = decodePolyline(route.overview_polyline.points);
-        setPlannedRoute(simplifiedRoute);
-
-        // Ajustar vista del mapa
-        if (mapRef.current) {
-          mapRef.current.fitToCoordinates([...detailedCoordinates], {
-            edgePadding: { top: 100, right: 50, bottom: 150, left: 50 },
-            animated: true,
-          });
-        }
+        setRouteInfo({
+          distance: leg.distance.text,
+          duration: leg.duration.text,
+          estimatedArrival,
+        });
       }
     } catch (error) {
-      console.error('Error al calcular ruta:', error);
-      // Fallback a ruta directa
-      const directRoute = [
-        currentLocation,
-        { latitude: currentDelivery.end_latitud, longitude: currentDelivery.end_longitud },
-      ];
-      setPlannedRoute(directRoute);
-      setDetailedRoute(directRoute);
+      console.error('Error al calcular información de ruta:', error);
     }
   };
 
   /**
-   * Decodifica una polilínea codificada de Google Maps
-   * @param encoded Cadena codificada
-   * @returns Array de coordenadas
+   * Abre Google Maps con direcciones
    */
-  const decodePolyline = (encoded: string): Location[] => {
-    if (!encoded) return [];
-    const poly: Location[] = [];
-    let index = 0, lat = 0, lng = 0;
-
-    while (index < encoded.length) {
-      let b, shift = 0, result = 0;
-      do {
-        b = encoded.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      const dlat = (result & 1) ? ~(result >> 1) : (result >> 1);
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      const dlng = (result & 1) ? ~(result >> 1) : (result >> 1);
-      lng += dlng;
-
-      poly.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  const openGoogleMapsNavigation = () => {
+    if (!currentLocation || !currentDelivery?.end_latitud || !currentDelivery?.end_longitud) {
+      Alert.alert('Error', 'No se pudo obtener la ubicación o destino');
+      return;
     }
-    return poly;
+
+    const data = {
+      source: {
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+      },
+      destination: {
+        latitude: currentDelivery.end_latitud,
+        longitude: currentDelivery.end_longitud,
+      },
+      params: [
+        {
+          key: 'travelmode',
+          value: 'driving', // driving, walking, bicycling, transit
+        },
+        {
+          key: 'dir_action',
+          value: 'navigate', // navigate para navegación directa
+        },
+      ],
+    };
+
+    try {
+      getDirections(data);
+      console.log('Google Maps abierto exitosamente');
+      setGoogleMapsOpened(true);
+    } catch (error) {
+      console.error('Error al abrir Google Maps:', error);
+      Alert.alert(
+        'Error',
+        'No se pudo abrir Google Maps. Asegúrate de tener la aplicación instalada.'
+      );
+    }
   };
 
   /**
-   * Renderiza las líneas de la ruta en el mapa
-   */
-  const renderRoutePolylines = () => {
-    const routeToDisplay = detailedRoute.length > 1 ? detailedRoute : plannedRoute;
-    if (routeToDisplay.length <= 1) return null;
-    
-    return (
-      <Polyline
-        coordinates={routeToDisplay}
-        strokeWidth={5}
-        strokeColor="#4A90E2"
-        lineCap="round"
-        lineJoin="round"
-        zIndex={1}
-      />
-    );
-  };
-
-  /**
-   * Calcula la hora estimada de llegada
-   */
-  const calculateArrivalTime = () => {
-    if (!routeInfo) return '--:--';
-    const now = new Date();
-    now.setSeconds(now.getSeconds() + routeInfo.duration.value);
-    return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  /**
-   * Inicia el seguimiento de ubicación en primer y segundo plano
+   * Inicia el seguimiento de ubicación en segundo plano
    */
   const startLocationTracking = async () => {
     try {
@@ -360,11 +313,11 @@ export default function MapScreen({}: MapScreenProps) {
       
       await LocationService.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
         accuracy: LocationService.Accuracy.High,
-        timeInterval: 2000,
-        distanceInterval: 1,
+        timeInterval: 5000,
+        distanceInterval: 10,
         foregroundService: {
-          notificationTitle: 'Navegación en curso',
-          notificationBody: 'Siguiendo la ruta hacia el destino',
+          notificationTitle: 'Entrega en progreso',
+          notificationBody: 'Rastreando ubicación para la entrega',
         },
       });
       
@@ -376,29 +329,15 @@ export default function MapScreen({}: MapScreenProps) {
   };
 
   /**
-   * Actualiza la cámara del mapa para seguir al usuario
-   */
-  const updateDriverCamera = (location: Location, heading: number = 0) => {
-    if (!mapRef.current || !location) return;
-    
-    mapRef.current.animateCamera({
-      center: location,
-      zoom: 18,
-      heading,
-      pitch: 0,
-    }, { duration: 300 });
-  };
-
-  /**
-   * Inicia el seguimiento en tiempo real (primer plano)
+   * Inicia el seguimiento en tiempo real
    */
   const startRealtimeLocationUpdates = async () => {
     try {
       await LocationService.watchPositionAsync(
         {
           accuracy: LocationService.Accuracy.BestForNavigation,
-          timeInterval: 1000,
-          distanceInterval: 3,
+          timeInterval: 5000,
+          distanceInterval: 10,
         },
         (location) => {
           const newLocation = {
@@ -408,11 +347,6 @@ export default function MapScreen({}: MapScreenProps) {
           
           setCurrentLocation(newLocation);
           setRouteCoordinates(prev => [...prev, newLocation]);
-          
-          if (deliveryState === 'in_progress') {
-            updateDriverCamera(newLocation, location.coords.heading || 0);
-          }
-          
           saveLocationTracking(newLocation);
         }
       );
@@ -434,7 +368,7 @@ export default function MapScreen({}: MapScreenProps) {
   };
 
   /**
-   * Guarda un evento de entrega (inicio, pausa, etc.)
+   * Guarda un evento de entrega
    */
   const saveDeliveryEvent = async (eventType: EventType, notes?: string) => {
     if (!currentDelivery || !currentLocation) return;
@@ -450,27 +384,11 @@ export default function MapScreen({}: MapScreenProps) {
     };
 
     // TODO: Implementar envío real a la API
-    /*
-    try {
-      const response = await fetch(`${Config.API_URL}/delivery-events`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authState.token}`,
-        },
-        body: JSON.stringify(event),
-      });
-      if (!response.ok) throw new Error('Error en la respuesta');
-    } catch (error) {
-      console.error('Error al guardar evento:', error);
-    }
-    */
-    
     console.log('Evento guardado (simulado):', event);
   };
 
   /**
-   * Guarda el seguimiento de ubicación para la entrega
+   * Guarda el seguimiento de ubicación
    */
   const saveLocationTracking = async (location: Location) => {
     if (!currentDelivery) return;
@@ -485,22 +403,6 @@ export default function MapScreen({}: MapScreenProps) {
     };
 
     // TODO: Implementar envío real a la API
-    /*
-    try {
-      const response = await fetch(`${Config.API_URL}/delivery-tracking`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authState.token}`,
-        },
-        body: JSON.stringify(tracking),
-      });
-      if (!response.ok) throw new Error('Error en la respuesta');
-    } catch (error) {
-      console.error('Error al guardar tracking:', error);
-    }
-    */
-    
     console.log('Tracking guardado (simulado):', tracking);
   };
 
@@ -508,18 +410,32 @@ export default function MapScreen({}: MapScreenProps) {
    * Inicia la entrega
    */
   const handleStartDelivery = async () => {
-    if (!currentLocation || !routeInfo) {
-      Alert.alert('Error', !currentLocation ? 'No se pudo obtener la ubicación' : 'No hay ruta calculada');
+    if (!currentLocation) {
+      Alert.alert('Error', 'No se pudo obtener la ubicación');
       return;
     }
 
-    setDeliveryState('in_progress');
-    setStartTime(new Date());
-    setRouteCoordinates([currentLocation]);
-    
-    updateDriverCamera(currentLocation);
-    await startLocationTracking();
-    await saveDeliveryEvent('inicio');
+    Alert.alert(
+      'Iniciar Entrega',
+      'Se abrirá Google Maps para navegación. El seguimiento continuará en segundo plano.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Continuar',
+          onPress: async () => {
+            setDeliveryState('in_progress');
+            setStartTime(new Date());
+            setRouteCoordinates([currentLocation]);
+            
+            await startLocationTracking();
+            await saveDeliveryEvent('inicio');
+            
+            // Abrir Google Maps
+            openGoogleMapsNavigation();
+          },
+        },
+      ]
+    );
   };
 
   /**
@@ -527,10 +443,24 @@ export default function MapScreen({}: MapScreenProps) {
    */
   const handlePauseDelivery = async () => {
     if (deliveryState !== 'in_progress') return;
-    setDeliveryState('paused');
-    setPausedTime(new Date());
-    await stopLocationTracking();
-    await saveDeliveryEvent('pausa');
+    
+    Alert.alert(
+      'Pausar Entrega',
+      '¿Deseas pausar la entrega? El seguimiento se detendrá.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Pausar',
+          onPress: async () => {
+            setDeliveryState('paused');
+            setPausedTime(new Date());
+            setCurrentTime(Date.now()); // Actualizar tiempo actual
+            await stopLocationTracking();
+            await saveDeliveryEvent('pausa');
+          },
+        },
+      ]
+    );
   };
 
   /**
@@ -538,26 +468,30 @@ export default function MapScreen({}: MapScreenProps) {
    */
   const handleResumeDelivery = async () => {
     if (deliveryState !== 'paused') return;
-    setDeliveryState('in_progress');
-    if (pausedTime) {
-      setTotalPausedDuration(prev => prev + (Date.now() - pausedTime.getTime()));
-      setPausedTime(null);
-    }
-    await startLocationTracking();
-    await saveDeliveryEvent('reanudacion');
-  };
-
-  /**
-   * Reporta un problema durante la entrega
-   */
-  const handleReportProblem = async () => {
-    if (!problemDescription.trim()) {
-      Alert.alert('Error', 'Por favor describe el problema');
-      return;
-    }
-    await saveDeliveryEvent('problema', problemDescription);
-    setShowProblemModal(false);
-    setProblemDescription('');
+    
+    Alert.alert(
+      'Reanudar Entrega',
+      'Se abrirá Google Maps nuevamente y continuará el seguimiento.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Reanudar',
+          onPress: async () => {
+            setDeliveryState('in_progress');
+            if (pausedTime) {
+              setTotalPausedDuration(prev => prev + (Date.now() - pausedTime.getTime()));
+              setPausedTime(null);
+            }
+            setCurrentTime(Date.now()); // Actualizar tiempo actual
+            await startLocationTracking();
+            await saveDeliveryEvent('reanudacion');
+            
+            // Abrir Google Maps nuevamente
+            openGoogleMapsNavigation();
+          },
+        },
+      ]
+    );
   };
 
   /**
@@ -565,7 +499,7 @@ export default function MapScreen({}: MapScreenProps) {
    */
   const handleCompleteDelivery = async () => {
     Alert.alert(
-      'Finalizar entrega',
+      'Finalizar Entrega',
       '¿Estás seguro de que deseas finalizar la entrega?',
       [
         { text: 'Cancelar', style: 'cancel' },
@@ -577,12 +511,7 @@ export default function MapScreen({}: MapScreenProps) {
             await saveDeliveryEvent('fin');
             
             // TODO: Enviar datos completos a la API
-            /*
-            const totalDuration = startTime ? 
-              Date.now() - startTime.getTime() - totalPausedDuration : 0;
-            await sendDeliveryCompleteToAPI(totalDuration);
-            */
-            
+            Alert.alert('Entrega finalizada', 'La entrega ha sido completada exitosamente');
             router.back();
           },
         },
@@ -591,259 +520,354 @@ export default function MapScreen({}: MapScreenProps) {
   };
 
   /**
-   * Centra el mapa en la ubicación actual
+   * Calcula el tiempo transcurrido
    */
-  const resetCameraToCurrentLocation = () => {
-    if (mapRef.current && currentLocation) {
-      mapRef.current.animateCamera({
-        center: currentLocation,
-        zoom: 18,
-        heading: 0,
-        pitch: 0,
-      }, { duration: 300 });
+  const getFormattedElapsedTime = () => {
+    if (!startTime) return '00:00:00';
+    
+    const now = deliveryState === 'paused' && pausedTime ? pausedTime.getTime() : currentTime;
+    const elapsed = now - startTime.getTime() - totalPausedDuration;
+    const hours = Math.floor(elapsed / 3600000);
+    const minutes = Math.floor((elapsed % 3600000) / 60000);
+    const seconds = Math.floor((elapsed % 60000) / 1000);
+    
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     }
+    
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  /**
+   * Maneja el evento de llamada telefónica
+   */
+  const handlePhonePress = (phoneNumber?: string | number) => {
+    if (!phoneNumber) {
+      Alert.alert('Error', 'Número no disponible');
+      return;
+    }
+    
+    const formattedNumber = `tel:${phoneNumber}`;
+    Linking.canOpenURL(formattedNumber)
+      .then((supported) => {
+        if (!supported) {
+          Alert.alert('Error', 'Tu dispositivo no soporta llamadas telefónicas.');
+        } else {
+          return Linking.openURL(formattedNumber);
+        }
+      })
+      .catch((err) => console.error('Error al abrir el teléfono:', err));
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Mapa principal */}
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        initialRegion={{
-          latitude: currentLocation?.latitude || mockDelivery.start_latitud,
-          longitude: currentLocation?.longitude || mockDelivery.start_longitud,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        }}
-        showsUserLocation={true}
-        showsTraffic={true}
-        followsUserLocation={false}
-        rotateEnabled={false}
-        pitchEnabled={false}
-      >
-        {/* Marker de destino */}
-        {mockDelivery.end_latitud && mockDelivery.end_longitud && (
-          <Marker
-            coordinate={{
-              latitude: mockDelivery.end_latitud,
-              longitude: mockDelivery.end_longitud,
-            }}
-            title={`Destino: ${mockDelivery.client?.name}`}
-            description={`Teléfono: ${mockDelivery.client?.phone}`}
-            pinColor="red"
-          />
-        )}
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+        >
+          <Ionicons name="arrow-back" size={24} color="#333" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Entrega</Text>
+        <View style={styles.headerSpacer} />
+      </View>
 
-        {/* Ruta planificada */}
-        {renderRoutePolylines()}
+      {/* Información de la entrega */}
+      <View style={styles.deliveryCard}>
+        <View style={styles.clientInfo}>
+          <Text style={styles.clientName}>{currentDelivery?.client?.name || 'Cliente'}</Text>
+          <TouchableOpacity onPress={() => handlePhonePress(currentDelivery?.client?.phone)}>
+            <Text style={styles.clientPhone}>
+              {currentDelivery?.client?.phone || 'N/A'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
-        {/* Ruta recorrida (solo durante entrega) */}
-        {routeCoordinates.length > 1 && deliveryState === 'in_progress' && (
-          <Polyline
-            coordinates={routeCoordinates}
-            strokeWidth={4}
-            strokeColor="#FF5722"
-            lineCap="round"
-            lineJoin="round"
-            zIndex={2}
-          />
-        )}
-      </MapView>
+        {/* Estado de la entrega */}
+        <View style={styles.statusContainer}>
+          <View style={[styles.statusIndicator, { backgroundColor: getStatusColor() }]} />
+          <Text style={styles.statusText}>{getStatusText()}</Text>
+          {deliveryState === 'in_progress' && (
+            <Text style={styles.elapsedTime}>{getFormattedElapsedTime()}</Text>
+          )}
+        </View>
 
-      {/* Botón de menú (esquina superior izquierda) */}
-      <TouchableOpacity
-        style={styles.menuButton}
-        onPress={() => router.back()}
-      >
-        <Ionicons name="arrow-back" size={24} color="#333" />
-      </TouchableOpacity>
-
-      {/* Panel inferior */}
-      <View style={styles.bottomPanel}>
-        {/* Información de la entrega */}
-        <View style={styles.deliveryInfo}>
-          <Text style={styles.clientName} numberOfLines={1}>
-            {currentDelivery?.client?.name || 'Cliente'}
-          </Text>
-          
-          {routeInfo && (
-            <View style={styles.routeInfoContainer}>
-              <View style={styles.routeInfoRow}>
-                <Ionicons name="location" size={14} color="#666" />
-                <Text style={styles.routeInfoText}>
-                  {routeInfo.distance.text}
-                </Text>
-              </View>
-              <View style={styles.routeInfoRow}>
-                <Ionicons name="time" size={14} color="#666" />
-                <Text style={styles.routeInfoText}>
-                  {routeInfo.duration.text} • Llegada: {calculateArrivalTime()}
-                </Text>
-              </View>
+        {/* Información de la ruta */}
+        {routeInfo && (
+          <View style={styles.routeInfo}>
+            <View style={styles.routeInfoRow}>
+              <Ionicons name="location" size={16} color="#666" />
+              <Text style={styles.routeInfoText}>Distancia: {routeInfo.distance}</Text>
             </View>
-          )}
-        </View>
+            <View style={styles.routeInfoRow}>
+              <Ionicons name="time" size={16} color="#666" />
+              <Text style={styles.routeInfoText}>Tiempo: {routeInfo.duration}</Text>
+            </View>
+            <View style={styles.routeInfoRow}>
+              <Ionicons name="alarm" size={16} color="#666" />
+              <Text style={styles.routeInfoText}>Llegada estimada: {routeInfo.estimatedArrival}</Text>
+            </View>
+          </View>
+        )}
+      </View>
 
-        {/* Botones de acción */}
-        <View style={styles.actionButtons}>
-          {deliveryState === 'not_started' ? (
+      {/* Información de navegación */}
+      {deliveryState === 'in_progress' && (
+        <View style={styles.navigationInfo}>
+          <Ionicons name="navigate" size={24} color="#4CAF50" />
+          <Text style={styles.navigationText}>
+            Navegando con Google Maps
+          </Text>
+          <TouchableOpacity onPress={openGoogleMapsNavigation}>
+            <Text style={styles.reopenText}>Reabrir Maps</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Botones de acción */}
+      <View style={styles.actionButtons}>
+        {deliveryState === 'not_started' ? (
+          <TouchableOpacity
+            style={styles.startButton}
+            onPress={handleStartDelivery}
+          >
+            <Ionicons name="play" size={20} color="#fff" />
+            <Text style={styles.startButtonText}>Iniciar Entrega</Text>
+          </TouchableOpacity>
+        ) : deliveryState === 'completed' ? (
+          <View style={styles.completedContainer}>
+            <Ionicons name="checkmark-circle" size={48} color="#4CAF50" />
+            <Text style={styles.completedText}>Entrega Completada</Text>
+          </View>
+        ) : (
+          <View style={styles.controlButtons}>
             <TouchableOpacity
-              style={styles.startButton}
-              onPress={handleStartDelivery}
+              style={[styles.controlButton, styles.pauseButton]}
+              onPress={deliveryState === 'in_progress' ? handlePauseDelivery : handleResumeDelivery}
             >
-              <Text style={styles.startButtonText}>Iniciar Viaje</Text>
+              <Ionicons
+                name={deliveryState === 'in_progress' ? 'pause' : 'play'}
+                size={20}
+                color="#fff"
+              />
+              <Text style={styles.controlButtonText}>
+                {deliveryState === 'in_progress' ? 'Pausar' : 'Reanudar'}
+              </Text>
             </TouchableOpacity>
-          ) : (
-            <>
-              <TouchableOpacity
-                style={[styles.actionButton, deliveryState === 'completed' && styles.disabledButton]}
-                onPress={deliveryState === 'in_progress' ? handlePauseDelivery : handleResumeDelivery}
-                disabled={deliveryState === 'completed'}
-              >
-                <Ionicons
-                  name={deliveryState === 'in_progress' ? 'pause' : 'play'}
-                  size={20}
-                  color="#333"
-                />
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.finishButton, deliveryState === 'completed' && styles.disabledButton]}
-                onPress={handleCompleteDelivery}
-                disabled={deliveryState === 'completed'}
-              >
-                <Text style={styles.finishButtonText}>Finalizar</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
+            <TouchableOpacity
+              style={[styles.controlButton, styles.completeButton]}
+              onPress={handleCompleteDelivery}
+            >
+              <Ionicons name="checkmark" size={20} color="#fff" />
+              <Text style={styles.controlButtonText}>Finalizar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
-};
 
-// Estilos optimizados para pantallas móviles
+  function getStatusColor() {
+    switch (deliveryState) {
+      case 'not_started': return '#FFA726';
+      case 'in_progress': return '#4CAF50';
+      case 'paused': return '#FF9800';
+      case 'completed': return '#2196F3';
+      default: return '#666';
+    }
+  }
+
+  function getStatusText() {
+    switch (deliveryState) {
+      case 'not_started': return 'Pendiente';
+      case 'in_progress': return 'En progreso';
+      case 'paused': return 'Pausada';
+      case 'completed': return 'Completada';
+      default: return 'Desconocido';
+    }
+  }
+}
+
+// Estilos de la pantalla MapScreen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
   },
-  map: {
-    flex: 1,
-  },
-  menuButton: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 30,
-    left: 15,
-    backgroundColor: 'white',
-    borderRadius: 20,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  deliveryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginHorizontal: 20,
+    marginTop: 20,
+    padding: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  bottomPanel: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 15,
-    paddingTop: 15,
-    // paddingBottom: Platform.OS === 'ios' ? 25 : 0,
-    paddingBottom: Platform.OS === 'ios' ? 25 : 0 && Platform.OS === 'android' ? 0 : 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 5,
-    maxHeight: height * 0.3,
+    elevation: 3,
   },
-  deliveryInfo: {
-    marginBottom: 12,
+  clientInfo: {
+    alignItems: 'center',
+    marginBottom: 16,
   },
   clientName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 4,
+  },
+  clientPhone: {
+    fontSize: 14,
+    color: '#4A90E2',
+    textDecorationLine: 'underline',
+    marginTop: 4,
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  statusIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+  statusText: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
-    textAlign: 'center',
-    marginBottom: 8,
   },
-  routeInfoContainer: {
-    marginTop: 8,
+  elapsedTime: {
+    fontSize: 14,
+    color: '#666',
+    marginLeft: 10,
+  },
+  routeInfo: {
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingTop: 16,
   },
   routeInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 8,
   },
   routeInfoText: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#666',
-    marginLeft: 6,
+    marginLeft: 8,
+  },
+  navigationInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: '#E8F5E8',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  navigationText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4CAF50',
+    flex: 1,
+    marginLeft: 10,
+  },
+  reopenText: {
+    fontSize: 14,
+    color: '#4CAF50',
+    textDecorationLine: 'underline',
   },
   actionButtons: {
+    paddingHorizontal: 20,
+    marginTop: 'auto',
+    marginBottom: 20,
+  },
+  startButton: {
+    backgroundColor: '#4A90E2',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
-  },
-  startButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 25,
     paddingVertical: 12,
-    paddingHorizontal: 35,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderRadius: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 5,
+    elevation: 3,
   },
   startButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '600',
+    marginLeft: 8,
   },
-  actionButton: {
-    backgroundColor: '#F0F0F0',
-    borderRadius: 25,
-    width: 45,
-    height: 45,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
+  controlButtons: {
+    flexDirection: 'row',
+    gap: 10,
   },
-  finishButton: {
-    backgroundColor: '#2196F3',
-    borderRadius: 25,
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
+  controlButton: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 5,
+    elevation: 3,
   },
-  finishButtonText: {
+  pauseButton: {
+    backgroundColor: '#FF9800',
+  },
+  completeButton: {
+    backgroundColor: '#e93a3aff',
+  },
+  controlButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '600',
+    marginLeft: 8,
   },
-  disabledButton: {
-    opacity: 0.5,
+  completedContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  completedText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4CAF50',
+    marginTop: 12,
   },
 });
