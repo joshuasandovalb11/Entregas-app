@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -83,6 +84,27 @@ export default function Home() {
     if (deliveryStatus.nextDeliveries.length > 0) {
       router.push('/map');
     }
+  };
+
+  /**
+   * Maneja el evento de llamada telefónica
+   */
+  const handlePhonePress = (phoneNumber?: string | number) => {
+    if (!phoneNumber) {
+      Alert.alert('Error', 'Número no disponible');
+      return;
+    }
+    
+    const formattedNumber = `tel:${phoneNumber}`;
+    Linking.canOpenURL(formattedNumber)
+      .then((supported) => {
+        if (!supported) {
+          Alert.alert('Error', 'Tu dispositivo no soporta llamadas telefónicas.');
+        } else {
+          return Linking.openURL(formattedNumber);
+        }
+      })
+      .catch((err) => console.error('Error al abrir el teléfono:', err));
   };
 
   return (
@@ -166,9 +188,11 @@ export default function Home() {
                   <Text style={styles.deliveryClient}>
                     {delivery.client?.name}
                   </Text>
-                  <Text style={styles.deliveryPhone}>
-                    {delivery.client?.phone}
-                  </Text>
+                  <TouchableOpacity onPress={() => handlePhonePress(delivery.client?.phone)}>
+                    <Text style={styles.deliveryPhone}>
+                      {delivery.client?.phone || 'N/A'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               ))}
               
@@ -381,7 +405,8 @@ const styles = StyleSheet.create({
   },
   deliveryPhone: {
     fontSize: 14,
-    color: '#666',
+    color: '#4A90E2',
+    textDecorationLine: 'underline',
     marginTop: 4,
   },
   startButton: {
