@@ -5,6 +5,7 @@ export interface Driver {
   password: string; //Se excluye en los datos publicos
   num_unity: string;
   vehicle_plate: string;
+  phone_number: string;
 }
 
 // Client types
