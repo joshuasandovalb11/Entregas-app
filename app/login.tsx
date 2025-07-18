@@ -145,8 +145,8 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   logo: {
-    width: 120,
-    height: 120,
+    width: 60,
+    height: 60,
     backgroundColor: '#4A90E2',
     borderRadius: 20,
     justifyContent: 'center',
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   title: {
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: 'bold',
     color: '#4A90E2',
     marginBottom: 8,
@@ -208,7 +208,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 50,
     paddingHorizontal: 15,
-    fontSize: 16,
+    fontSize: 14,
     color: '#333',
   },
   eyeIcon: {
@@ -235,7 +235,7 @@ const styles = StyleSheet.create({
   },
   loginButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
   },
 });
