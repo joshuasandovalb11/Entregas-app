@@ -76,6 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         username: username,
         num_unity: 'Unidad 7',
         vehicle_plate: 'XYZ-1234',
+        phone_number: '1234567890',
       };
 
       const token = 'mock-token';

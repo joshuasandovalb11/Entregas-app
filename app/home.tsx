@@ -118,6 +118,9 @@ export default function Home() {
           <Text style={styles.vehicleInfo}>
             Placas: {authState.driver?.vehicle_plate || 'N/A'}
           </Text>
+          <Text style={styles.vehicleInfo}>
+            Numero de teléfono: {authState.driver?.phone_number || 'N/A'}
+          </Text>
         </View>
 
         {/* Delivery Status */}
@@ -248,6 +251,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
+    textTransform: 'uppercase',
   },
   logoutButton: {
     padding: 8,
