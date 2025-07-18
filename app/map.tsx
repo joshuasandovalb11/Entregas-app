@@ -659,18 +659,7 @@ export default function MapScreen({}: MapScreenProps) {
         <Ionicons name="arrow-back" size={24} color="#333" />
       </TouchableOpacity>
 
-      {/* Botón de centrar (arriba del panel inferior) */}
-      {deliveryState === 'in_progress' && (
-        <TouchableOpacity
-          style={styles.centerButton}
-          onPress={resetCameraToCurrentLocation}
-        >
-          <Ionicons name="locate" size={20} color="#4A90E2" />
-          <Text style={styles.centerButtonText}>Centrar</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Panel inferior compacto */}
+      {/* Panel inferior */}
       <View style={styles.bottomPanel}>
         {/* Información de la entrega */}
         <View style={styles.deliveryInfo}>
@@ -729,55 +718,7 @@ export default function MapScreen({}: MapScreenProps) {
             </>
           )}
         </View>
-        
-        {/* Botón para reportar problemas (solo durante entrega) */}
-        {deliveryState === 'in_progress' &&(
-          <TouchableOpacity
-            style={styles.problemButton}
-            onPress={() => setShowProblemModal(true)}
-          >
-            <Ionicons name="alert-circle-outline" size={18} color="#fc4109" />
-            <Text style={styles.problemButtonText}>Reportar Problema</Text>
-          </TouchableOpacity>
-        )}
       </View>
-
-      {/* Modal para reportar problemas */}
-      <Modal
-        visible={showProblemModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowProblemModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Reportar Problema</Text>
-            <TextInput
-              style={styles.problemInput}
-              placeholder="Describe el problema..."
-              value={problemDescription}
-              onChangeText={setProblemDescription}
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowProblemModal(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.submitButton]}
-                onPress={handleReportProblem}
-              >
-                <Text style={styles.submitButtonText}>Reportar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 };
@@ -806,28 +747,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
-  },
-  centerButton: {
-    position: 'absolute',
-    bottom: height * 0.22, // Posición relativa al panel inferior
-    right: 15,
-    backgroundColor: 'white',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  centerButtonText: {
-    marginLeft: 5,
-    color: '#4A90E2',
-    fontSize: 14,
-    fontWeight: '600',
   },
   bottomPanel: {
     backgroundColor: '#FFFFFF',
@@ -926,74 +845,5 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
-  },
-  problemButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-  problemButtonText: {
-    color: '#fc4109',
-    fontSize: 13,
-    fontWeight: '600',
-    marginLeft: 5,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 20,
-    width: width - 40,
-    maxWidth: 400,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
-    textAlign: 'center',
-  },
-  problemInput: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    padding: 12,
-    minHeight: 100,
-    fontSize: 15,
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginHorizontal: 5,
-  },
-  cancelButton: {
-    backgroundColor: '#F0F0F0',
-  },
-  submitButton: {
-    backgroundColor: '#FF5722',
-  },
-  cancelButtonText: {
-    color: '#333',
-    fontSize: 15,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  submitButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-    textAlign: 'center',
   },
 });
