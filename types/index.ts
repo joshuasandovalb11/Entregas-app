@@ -51,7 +51,6 @@ export interface DeliveryEvent {
   timestamp: string;
   latitud: number;
   longitud: number;
-  notes?: string;
 }
 
 // Auth types

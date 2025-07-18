@@ -171,7 +171,7 @@ export default function MapScreen({}: MapScreenProps) {
     if (deliveryState === 'in_progress') {
       interval = setInterval(() => {
         setCurrentTime(Date.now());
-      }, 1000); // Actualizar cada segundo
+      }, 1000);
     }
     
     return () => {
@@ -380,7 +380,6 @@ export default function MapScreen({}: MapScreenProps) {
       timestamp: new Date().toISOString(),
       latitud: currentLocation.latitude,
       longitud: currentLocation.longitude,
-      notes,
     };
 
     // TODO: Implementar envío real a la API
@@ -669,6 +668,9 @@ export default function MapScreen({}: MapScreenProps) {
     </SafeAreaView>
   );
 
+  /**
+   * Obtiene el color del indicador de estado según el estado de la entrega
+   */
   function getStatusColor() {
     switch (deliveryState) {
       case 'not_started': return '#FFA726';
@@ -679,6 +681,9 @@ export default function MapScreen({}: MapScreenProps) {
     }
   }
 
+  /**
+   * Obtiene el texto del estado de la entrega
+   */
   function getStatusText() {
     switch (deliveryState) {
       case 'not_started': return 'Pendiente';
